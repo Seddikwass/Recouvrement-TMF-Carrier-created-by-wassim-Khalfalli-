@@ -1,0 +1,90 @@
+name: recouvrement-tmf-carrier
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: on-failure
+    environment:
+      POSTGRES_USER: recouvrement
+      POSTGRES_PASSWORD: recouvrement
+      POSTGRES_DB: recouvrement
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recouvrement -d recouvrement"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    labels:
+      base44.project: "Recouvrement TMF Carrier database"
+      base44.kind: infra
+
+  api:
+    build:
+      context: ./backend
+    restart: on-failure
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+    environment:
+      DATABASE_URL: postgresql+psycopg2://recouvrement:recouvrement@db:5432/recouvrement
+      PYTHONUNBUFFERED: "1"
+      BASE44_PREVIEW_MODE:
+    command:
+      ["sh", "-ec", "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status==200 else 1)\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
+    labels:
+      base44.project: "Recouvrement TMF Carrier API"
+      base44.kind: api
+      base44.docs: /api/docs
+
+  web:
+    build:
+      context: ./frontend
+    restart: on-failure
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - web-node-modules:/app/node_modules
+    environment:
+      BASE44_PREVIEW_MODE:
+      BASE44_PUBLIC_HOST_SUFFIX:
+      BASE44_SANDBOX_HOST_DOMAIN:
+      VITE_API_PROXY_TARGET: http://api:8000
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: ${__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS:-}
+    ports:
+      - "3000:5173"
+    command: ["sh", "-ec", "npm ci --no-audit --no-fund && exec npm run dev"]
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:5173/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    labels:
+      base44.project: "Recouvrement TMF Carrier"
+      base44.kind: web
+      base44.port: 3000
+
+volumes:
+  db-data:
+  web-node-modules:
